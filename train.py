@@ -32,6 +32,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn.functional as F
+from tqdm import tqdm
 from torch.utils.data import DataLoader
 
 
@@ -200,7 +201,7 @@ def train(args):
         dataset,
         batch_size=args.batch_size,
         shuffle=True,
-        num_workers=4,
+        num_workers=2,
         pin_memory=True,
         drop_last=True,
         prefetch_factor=2,
@@ -274,7 +275,7 @@ def train(args):
         model.train()
         batch_losses = []
 
-        for x1, pitch in loader:
+        for x1, pitch in tqdm(loader):
             x1    = x1.to(device, non_blocking=True)
             pitch = pitch.to(device, non_blocking=True)
 
