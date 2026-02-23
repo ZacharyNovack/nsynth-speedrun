@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Checkpoints — exclude from the student-facing repo;
+# students generate their own via train.py
+*.pt
+
+# Generated audio samples
+samples*/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Training logs
+*.log
+
+# Data (never commit raw audio datasets)
+nsynth*/
+.claude/
+*.sh
