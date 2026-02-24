@@ -3,9 +3,9 @@ __pycache__/
 *.pyc
 *.pyo
 
-# Checkpoints — exclude from the student-facing repo;
-# students generate their own via train.py
+# Checkpoints — exclude experiment checkpoints; keep the provided pretrained model
 *.pt
+!pretrained_keyboard.pt
 
 # Generated audio samples
 samples*/
@@ -20,3 +20,6 @@ samples*/
 nsynth*/
 .claude/
 *.sh
+train.py
+eval.py
+infer.py
