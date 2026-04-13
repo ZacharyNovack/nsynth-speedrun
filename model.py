@@ -1,21 +1,23 @@
 """
 model.py — TinyFlowNet, UNet2DFlowNet, DiTFlowNet (all pitch-conditioned, CFG-ready)
 
-All three models share the same forward interface:
-    forward(x, t, pitch) → same shape as x
+Time convention (via FlowModelWrapper)
+--------------------------------------
+Students interact with the model through ``FlowModelWrapper``, which uses
+the standard diffusion convention:
 
-where:
-    x     : (B, 2, FREQ_BINS, TIME_FRAMES)  noisy spectrogram
-    t     : (B,)  time in [0, 1]
-    pitch : (B,)  MIDI pitch 0–127, or NULL_PITCH (128) for unconditional
+    t = 1  →  pure noise          t = 0  →  clean data
+
+    model(x, t, pitch) → velocity pointing from noise toward data
+
+Generation integrates from t=1 to t=0:   x_{t−Δt} = x_t − v·Δt
+
+The raw network architectures below use the opposite internal convention
+(t=0 noise, t=1 data, v = data − noise).  The wrapper handles the mapping.
 
 Classifier-Free Guidance (CFG)
 -------------------------------
 Pitch index 128 is reserved as the null / unconditional token.
-During training (see train.py --p_uncond), some pitch labels are randomly
-replaced with 128. At inference (see infer.py --guidance_scale), the model
-is run twice and the outputs are combined:
-    v = v_uncond + guidance_scale * (v_cond - v_uncond)
 
 Model overview
 --------------
@@ -338,10 +340,38 @@ class DiTFlowNet(nn.Module):
         return self._unpatchify(tokens, freq_orig, time_orig, nf, nt)
 
 
+# ── Flow model wrapper (diffusion convention) ────────────────────────────────
+
+class FlowModelWrapper(nn.Module):
+    """Wraps a raw flow model to use the standard diffusion time convention:
+
+        t = 1  →  pure noise
+        t = 0  →  clean data
+
+    The wrapped model's ``forward(x, t, pitch)`` returns the velocity field
+    pointing from noise toward data, so that generation integrates from t=1
+    down to t=0 via  x_{t-Δt} = x_t − v·Δt.
+
+    Internally the raw network was trained with the opposite convention
+    (t=0 = noise, t=1 = data, velocity = data − noise), so the wrapper
+    simply flips time and negates the output.  Gradients flow through
+    correctly, so fine-tuning works as expected.
+    """
+
+    def __init__(self, inner: nn.Module):
+        super().__init__()
+        self.inner = inner
+
+    def forward(self, x: torch.Tensor, t: torch.Tensor,
+                pitch: torch.Tensor) -> torch.Tensor:
+        return -self.inner(x, 1.0 - t, pitch)
+
+
 # ── Utilities ──────────────────────────────────────────────────────────────────
 
 def count_params(model: nn.Module) -> int:
-    return sum(p.numel() for p in model.parameters())
+    inner = model.inner if isinstance(model, FlowModelWrapper) else model
+    return sum(p.numel() for p in inner.parameters())
 
 
 def build_model_from_config(cfg: dict) -> nn.Module:
@@ -362,3 +392,29 @@ def build_model_from_config(cfg: dict) -> nn.Module:
         )
     else:
         raise ValueError(f"Unknown model_type: {model_type!r}")
+
+
+def load_flow_model(ckpt_path: str, device: str = "cpu"):
+    """Load a checkpoint and return ``(wrapped_model, ckpt_dict)``.
+
+    The returned model uses the standard diffusion convention
+    (t=1 noise, t=0 data).
+    """
+    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+    raw  = build_model_from_config(ckpt["config"]).to(device)
+    raw.load_state_dict(ckpt["model_state"])
+    model = FlowModelWrapper(raw)
+    model.eval()
+    return model, ckpt
+
+
+def save_flow_model(model: nn.Module, path: str, config: dict,
+                    n_params: int, **extra):
+    """Save a model checkpoint (unwraps ``FlowModelWrapper`` automatically)."""
+    inner = model.inner if isinstance(model, FlowModelWrapper) else model
+    torch.save({
+        "model_state": inner.state_dict(),
+        "config":      config,
+        "n_params":    n_params,
+        **extra,
+    }, path)
